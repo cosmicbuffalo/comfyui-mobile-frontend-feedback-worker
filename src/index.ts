@@ -4,9 +4,7 @@ interface RateLimit {
 
 interface Env {
   GITHUB_PAT: string;
-  TURNSTILE_SECRET: string;
   GITHUB_REPO: string;
-  ALLOWED_ORIGINS: string;
   RATE_LIMITER: RateLimit;
 }
 
@@ -15,22 +13,28 @@ interface FeedbackPayload {
   body?: unknown;
   contact?: unknown;
   diagnostics?: unknown;
-  turnstileToken?: unknown;
+  // Honeypot — must be empty/absent. Bots that auto-fill all visible fields
+  // will trip this and get rejected without giving them a useful error.
+  website?: unknown;
 }
 
 const MAX_TITLE_LEN = 200;
+const MIN_BODY_LEN = 10;
 const MAX_BODY_LEN = 8000;
 const MAX_CONTACT_LEN = 200;
 const MAX_DIAGNOSTICS_LEN = 4000;
 
-function corsHeaders(origin: string | null, allowed: Set<string>): Record<string, string> {
-  const allowOrigin = origin && allowed.has(origin) ? origin : '';
+// We intentionally allow any origin. ComfyUI users run the mobile frontend on
+// arbitrary hostnames (LAN IPs, tunnels, custom DNS), so an allowlist is
+// impractical. Real abuse protection lives in the rate limit, the honeypot,
+// and the PAT being scoped to a single repo's issues. CORS is a browser-side
+// guard anyway, easily bypassed by a server-side caller.
+function corsHeaders(): Record<string, string> {
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
-    'Vary': 'Origin',
   };
 }
 
@@ -48,23 +52,30 @@ function jsonResponse(
   });
 }
 
-async function verifyTurnstile(
-  token: string,
-  secret: string,
-  ip: string,
-): Promise<boolean> {
-  const form = new FormData();
-  form.append('secret', secret);
-  form.append('response', token);
-  form.append('remoteip', ip);
+// GitHub username rules: 1–39 chars, alphanumeric or hyphens, can't start
+// or end with a hyphen, can't have consecutive hyphens.
+const GITHUB_HANDLE_REGEX = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 
-  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-    method: 'POST',
-    body: form,
-  });
-  if (!res.ok) return false;
-  const data = (await res.json()) as { success?: boolean };
-  return data.success === true;
+async function resolveGithubHandle(contact: string, env: Env): Promise<string | null> {
+  const candidate = (contact.startsWith('@') ? contact.slice(1) : contact).trim();
+  if (!candidate || candidate.includes('@') || /\s/.test(candidate)) return null;
+  if (!GITHUB_HANDLE_REGEX.test(candidate)) return null;
+
+  try {
+    const res = await fetch(`https://api.github.com/users/${candidate}`, {
+      headers: {
+        'Authorization': `Bearer ${env.GITHUB_PAT}`,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'comfyui-mobile-frontend-feedback-worker',
+      },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { login?: string };
+    return typeof data.login === 'string' ? data.login : null;
+  } catch {
+    return null;
+  }
 }
 
 async function createGithubIssue(
@@ -94,20 +105,23 @@ async function createGithubIssue(
   return (await res.json()) as { html_url: string; number: number };
 }
 
-function sanitizeString(value: unknown, maxLen: number): string | null {
+function sanitizeString(value: unknown, maxLen: number, minLen = 1): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > maxLen) return null;
+  if (trimmed.length < minLen || trimmed.length > maxLen) return null;
   return trimmed;
 }
 
 function composeIssueBody(
   description: string,
   contact: string | null,
+  validatedHandle: string | null,
   diagnostics: string | null,
 ): string {
   const parts: string[] = [description];
-  if (contact) {
+  if (validatedHandle) {
+    parts.push('', '---', '', `cc @${validatedHandle}`);
+  } else if (contact) {
     parts.push('', '---', '', `**Contact:** ${contact}`);
   }
   if (diagnostics) {
@@ -128,9 +142,7 @@ function composeIssueBody(
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const origin = request.headers.get('Origin');
-    const allowed = new Set(env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean));
-    const cors = corsHeaders(origin, allowed);
+    const cors = corsHeaders();
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors });
@@ -138,10 +150,6 @@ export default {
 
     if (request.method !== 'POST' || url.pathname !== '/feedback') {
       return jsonResponse({ error: 'not_found' }, 404, cors);
-    }
-
-    if (!origin || !allowed.has(origin)) {
-      return jsonResponse({ error: 'origin_not_allowed' }, 403, cors);
     }
 
     const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
@@ -157,10 +165,14 @@ export default {
       return jsonResponse({ error: 'invalid_json' }, 400, cors);
     }
 
+    // Honeypot: any value here means a bot filled a hidden field.
+    if (typeof payload.website === 'string' && payload.website.trim().length > 0) {
+      return jsonResponse({ error: 'invalid_fields' }, 400, cors);
+    }
+
     const title = sanitizeString(payload.title, MAX_TITLE_LEN);
-    const body = sanitizeString(payload.body, MAX_BODY_LEN);
-    const turnstileToken = sanitizeString(payload.turnstileToken, 2048);
-    if (!title || !body || !turnstileToken) {
+    const body = sanitizeString(payload.body, MAX_BODY_LEN, MIN_BODY_LEN);
+    if (!title || !body) {
       return jsonResponse({ error: 'invalid_fields' }, 400, cors);
     }
 
@@ -169,12 +181,13 @@ export default {
       ? sanitizeString(payload.diagnostics, MAX_DIAGNOSTICS_LEN)
       : null;
 
-    const turnstileOk = await verifyTurnstile(turnstileToken, env.TURNSTILE_SECRET, ip);
-    if (!turnstileOk) {
-      return jsonResponse({ error: 'turnstile_failed' }, 403, cors);
-    }
+    const validatedHandle = contact ? await resolveGithubHandle(contact, env) : null;
 
-    const issue = await createGithubIssue(env, title, composeIssueBody(body, contact, diagnostics));
+    const issue = await createGithubIssue(
+      env,
+      title,
+      composeIssueBody(body, contact, validatedHandle, diagnostics),
+    );
     if (!issue) {
       return jsonResponse({ error: 'github_create_failed' }, 502, cors);
     }

@@ -1,9 +1,5 @@
 # Copy to .dev.vars (which is gitignored) for local `wrangler dev` runs.
-# In production these go in via `wrangler secret put GITHUB_PAT` etc.
+# In production this goes in via `wrangler secret put GITHUB_PAT`.
 
 # Fine-grained PAT with Issues: Read+Write on cosmicbuffalo/comfyui-mobile-frontend
 GITHUB_PAT=github_pat_xxx
-
-# Cloudflare Turnstile secret key from the Turnstile dashboard. Use the
-# always-passes test key 1x0000000000000000000000000000000AA for local dev.
-TURNSTILE_SECRET=0x4AAAAAAA_xxx

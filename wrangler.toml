@@ -6,12 +6,12 @@ compatibility_date = "2026-04-01"
 # via `wrangler secret put` — never put them here.
 [vars]
 GITHUB_REPO = "cosmicbuffalo/comfyui-mobile-frontend"
-ALLOWED_ORIGINS = "https://comfyui-mobile-frontend.com,http://localhost:3000,http://localhost:8188"
 
-# Per-IP rate limiting. 5 submissions per 60s should comfortably handle real
-# users while making spam expensive.
+# Per-IP rate limiting. With Turnstile removed, this is the primary throttle
+# against spam alongside the honeypot field. 3 submissions per 60s leaves
+# room for a legit user submitting a correction without burning the limit.
 [[unsafe.bindings]]
 name = "RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1001"
-simple = { limit = 5, period = 60 }
+simple = { limit = 3, period = 60 }
