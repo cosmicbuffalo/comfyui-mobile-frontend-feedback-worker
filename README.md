@@ -10,18 +10,17 @@ mobile app -> POST /feedback (form data + honeypot field)
            -> reject if honeypot is filled
            -> validate fields (title, body min length)
            -> categorize `contact`:
-                * matches GitHub handle + GET /users/<name> succeeds -> cc @handle in issue
-                * matches an email -> Resend a notification to the maintainer
-                                      (issue body redacts the email)
-                * anything else -> pass through verbatim in issue body
+                * verified GitHub handle (GET /users/<name> succeeds) -> cc @handle in issue
+                * anything else (emails, phone numbers, random text) ->
+                    redacted from issue body, forwarded to maintainer via Resend
            -> POST to GitHub Issues API with PAT
-           -> if email path: ctx.waitUntil sendContactEmail
+           -> if private contact: ctx.waitUntil sendContactEmail
            -> return { url, number }
 ```
 
-A note on the contact field: if a submitter provides a string that resolves to a real GitHub user (with or without a leading `@`), the worker writes `cc @handle` into the issue body, which subscribes that user to the issue. This is the same trust model GitHub itself uses for `@-mentions` — anyone can mention anyone. If abuse becomes a problem, drop the `cc @` line in `composeIssueBody` and treat all contacts as plain text.
+The contact field is binary: only verified GitHub handles end up on the public issue (as a `cc @handle` mention, which subscribes that user just like any GitHub @-mention). Everything else is treated as private — emails, phone numbers, free text, anything that doesn't resolve to a real GitHub user — and gets forwarded to the maintainer's inbox via [Resend](https://resend.com), with the issue body showing `**Contact:** _sent privately to the maintainer_` so the submitter knows what to expect.
 
-Email-shaped contacts are routed to the maintainer via [Resend](https://resend.com) instead of being written into the public issue body. The issue body shows `**Contact:** _sent privately to the maintainer_` so the submitter knows what to expect, and the maintainer can reply directly to the email (Reply-To is set to the submitter).
+Reply-To on the email is set to the submitter when their contact looks like a valid email address; otherwise the email body says you'll need another channel to reach them.
 
 Anti-abuse layers (intentionally light, since the PAT is scoped to a single repo's issues):
 - Per-IP rate limiting

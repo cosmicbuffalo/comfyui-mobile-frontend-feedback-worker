@@ -115,22 +115,35 @@ async function createGithubIssue(
 
 async function sendContactEmail(
   env: Env,
-  submitterEmail: string,
+  contact: string,
   issue: { html_url: string; number: number },
   title: string,
   body: string,
 ): Promise<void> {
+  const isReplyableEmail = EMAIL_REGEX.test(contact);
   const subject = `[feedback #${issue.number}] ${title}`;
   const text = [
-    `New feedback from ${submitterEmail}:`,
+    `New feedback. Submitter contact: ${contact}`,
     '',
     body,
     '',
     '--',
     `Issue: ${issue.html_url}`,
     '',
-    `Replying to this email goes directly to ${submitterEmail}.`,
+    isReplyableEmail
+      ? `Replying to this email goes directly to ${contact}.`
+      : "The contact above isn't an email; you'll need another channel to reach the submitter.",
   ].join('\n');
+
+  const payload: Record<string, unknown> = {
+    from: env.FROM_EMAIL,
+    to: [env.NOTIFY_EMAIL],
+    subject,
+    text,
+  };
+  if (isReplyableEmail) {
+    payload.reply_to = [contact];
+  }
 
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -139,13 +152,7 @@ async function sendContactEmail(
         'Authorization': `Bearer ${env.RESEND_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        from: env.FROM_EMAIL,
-        to: [env.NOTIFY_EMAIL],
-        reply_to: [submitterEmail],
-        subject,
-        text,
-      }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       console.error('resend send failed', res.status, await res.text());
@@ -164,7 +171,6 @@ function sanitizeString(value: unknown, maxLen: number, minLen = 1): string | nu
 
 function composeIssueBody(
   description: string,
-  contact: string | null,
   validatedHandle: string | null,
   contactSentPrivately: boolean,
   diagnostics: string | null,
@@ -174,8 +180,6 @@ function composeIssueBody(
     parts.push('', '---', '', `cc @${validatedHandle}`);
   } else if (contactSentPrivately) {
     parts.push('', '---', '', '**Contact:** _sent privately to the maintainer_');
-  } else if (contact) {
-    parts.push('', '---', '', `**Contact:** ${contact}`);
   }
   if (diagnostics) {
     parts.push(
@@ -235,18 +239,21 @@ export default {
       : null;
 
     const validatedHandle = contact ? await resolveGithubHandle(contact, env) : null;
-    const isEmailContact = !validatedHandle && !!contact && EMAIL_REGEX.test(contact);
+    // Anything the submitter typed that isn't a verified GitHub handle is treated
+    // as private — emails, phone numbers, random text all get redacted from the
+    // public issue body and forwarded to the maintainer's inbox instead.
+    const contactSentPrivately = !!contact && !validatedHandle;
 
     const issue = await createGithubIssue(
       env,
       title,
-      composeIssueBody(body, contact, validatedHandle, isEmailContact, diagnostics),
+      composeIssueBody(body, validatedHandle, contactSentPrivately, diagnostics),
     );
     if (!issue) {
       return jsonResponse({ error: 'github_create_failed' }, 502, cors);
     }
 
-    if (isEmailContact && contact) {
+    if (contactSentPrivately && contact) {
       // Fire-and-forget — don't block the response on the email send. Failures
       // are logged via the resend helper so we can spot them in `wrangler tail`.
       ctx.waitUntil(sendContactEmail(env, contact, issue, title, body));
