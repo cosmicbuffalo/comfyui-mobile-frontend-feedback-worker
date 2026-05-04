@@ -5,6 +5,9 @@ interface RateLimit {
 interface Env {
   GITHUB_PAT: string;
   GITHUB_REPO: string;
+  RESEND_API_KEY: string;
+  NOTIFY_EMAIL: string;
+  FROM_EMAIL: string;
   RATE_LIMITER: RateLimit;
 }
 
@@ -56,6 +59,11 @@ function jsonResponse(
 // or end with a hyphen, can't have consecutive hyphens.
 const GITHUB_HANDLE_REGEX = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 
+// Loose email check — anything user-provided that has a single @ with text on
+// both sides and a dot in the domain. Good enough to decide between "send via
+// email" and "leave as plain text in the issue body".
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 async function resolveGithubHandle(contact: string, env: Env): Promise<string | null> {
   const candidate = (contact.startsWith('@') ? contact.slice(1) : contact).trim();
   if (!candidate || candidate.includes('@') || /\s/.test(candidate)) return null;
@@ -105,6 +113,48 @@ async function createGithubIssue(
   return (await res.json()) as { html_url: string; number: number };
 }
 
+async function sendContactEmail(
+  env: Env,
+  submitterEmail: string,
+  issue: { html_url: string; number: number },
+  title: string,
+  body: string,
+): Promise<void> {
+  const subject = `[feedback #${issue.number}] ${title}`;
+  const text = [
+    `New feedback from ${submitterEmail}:`,
+    '',
+    body,
+    '',
+    '--',
+    `Issue: ${issue.html_url}`,
+    '',
+    `Replying to this email goes directly to ${submitterEmail}.`,
+  ].join('\n');
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: env.FROM_EMAIL,
+        to: [env.NOTIFY_EMAIL],
+        reply_to: [submitterEmail],
+        subject,
+        text,
+      }),
+    });
+    if (!res.ok) {
+      console.error('resend send failed', res.status, await res.text());
+    }
+  } catch (err) {
+    console.error('resend send threw', err);
+  }
+}
+
 function sanitizeString(value: unknown, maxLen: number, minLen = 1): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -116,11 +166,14 @@ function composeIssueBody(
   description: string,
   contact: string | null,
   validatedHandle: string | null,
+  contactSentPrivately: boolean,
   diagnostics: string | null,
 ): string {
   const parts: string[] = [description];
   if (validatedHandle) {
     parts.push('', '---', '', `cc @${validatedHandle}`);
+  } else if (contactSentPrivately) {
+    parts.push('', '---', '', '**Contact:** _sent privately to the maintainer_');
   } else if (contact) {
     parts.push('', '---', '', `**Contact:** ${contact}`);
   }
@@ -140,7 +193,7 @@ function composeIssueBody(
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const cors = corsHeaders();
 
@@ -182,14 +235,21 @@ export default {
       : null;
 
     const validatedHandle = contact ? await resolveGithubHandle(contact, env) : null;
+    const isEmailContact = !validatedHandle && !!contact && EMAIL_REGEX.test(contact);
 
     const issue = await createGithubIssue(
       env,
       title,
-      composeIssueBody(body, contact, validatedHandle, diagnostics),
+      composeIssueBody(body, contact, validatedHandle, isEmailContact, diagnostics),
     );
     if (!issue) {
       return jsonResponse({ error: 'github_create_failed' }, 502, cors);
+    }
+
+    if (isEmailContact && contact) {
+      // Fire-and-forget — don't block the response on the email send. Failures
+      // are logged via the resend helper so we can spot them in `wrangler tail`.
+      ctx.waitUntil(sendContactEmail(env, contact, issue, title, body));
     }
 
     return jsonResponse({ url: issue.html_url, number: issue.number }, 200, cors);

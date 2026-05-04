@@ -6,6 +6,7 @@ compatibility_date = "2026-04-01"
 # via `wrangler secret put` — never put them here.
 [vars]
 GITHUB_REPO = "cosmicbuffalo/comfyui-mobile-frontend"
+FROM_EMAIL = "feedback@comfyui-mobile-frontend.com"
 
 # Per-IP rate limiting. With Turnstile removed, this is the primary throttle
 # against spam alongside the honeypot field. 3 submissions per 60s leaves

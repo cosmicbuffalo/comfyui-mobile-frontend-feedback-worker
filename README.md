@@ -9,13 +9,19 @@ mobile app -> POST /feedback (form data + honeypot field)
            -> per-IP rate limit (3 / min)
            -> reject if honeypot is filled
            -> validate fields (title, body min length)
-           -> if `contact` looks like a GitHub handle, GET /users/<name> to confirm
-              and use as a `cc @handle` mention; otherwise pass through verbatim
+           -> categorize `contact`:
+                * matches GitHub handle + GET /users/<name> succeeds -> cc @handle in issue
+                * matches an email -> Resend a notification to the maintainer
+                                      (issue body redacts the email)
+                * anything else -> pass through verbatim in issue body
            -> POST to GitHub Issues API with PAT
+           -> if email path: ctx.waitUntil sendContactEmail
            -> return { url, number }
 ```
 
 A note on the contact field: if a submitter provides a string that resolves to a real GitHub user (with or without a leading `@`), the worker writes `cc @handle` into the issue body, which subscribes that user to the issue. This is the same trust model GitHub itself uses for `@-mentions` — anyone can mention anyone. If abuse becomes a problem, drop the `cc @` line in `composeIssueBody` and treat all contacts as plain text.
+
+Email-shaped contacts are routed to the maintainer via [Resend](https://resend.com) instead of being written into the public issue body. The issue body shows `**Contact:** _sent privately to the maintainer_` so the submitter knows what to expect, and the maintainer can reply directly to the email (Reply-To is set to the submitter).
 
 Anti-abuse layers (intentionally light, since the PAT is scoped to a single repo's issues):
 - Per-IP rate limiting
@@ -28,10 +34,13 @@ If abuse becomes a problem in practice, swap in Turnstile (the previous version 
 
 1. `npm install`
 2. `npx wrangler login` — opens browser, authorizes wrangler against your Cloudflare account.
-3. Set the production GitHub PAT:
+3. Set the production secrets:
    ```
-   npx wrangler secret put GITHUB_PAT
+   npx wrangler secret put GITHUB_PAT       # fine-grained PAT, Issues: Read+Write
+   npx wrangler secret put RESEND_API_KEY   # for emailing the maintainer on email contacts
+   npx wrangler secret put NOTIFY_EMAIL     # where contact-emails get delivered
    ```
+   The `FROM_EMAIL` value lives in `wrangler.toml` since it's already public via DNS.
 4. `npx wrangler deploy` — deploys to `comfyui-mobile-frontend-feedback.<your-subdomain>.workers.dev`.
 5. Bind a custom route. In the Cloudflare dashboard:
    - Go to **Workers & Pages** -> the `comfyui-mobile-frontend-feedback` worker -> **Settings** -> **Domains & Routes**

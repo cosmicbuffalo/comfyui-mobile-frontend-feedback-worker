@@ -1,5 +1,13 @@
 # Copy to .dev.vars (which is gitignored) for local `wrangler dev` runs.
-# In production this goes in via `wrangler secret put GITHUB_PAT`.
+# In production these go in via `wrangler secret put <NAME>` instead.
 
 # Fine-grained PAT with Issues: Read+Write on cosmicbuffalo/comfyui-mobile-frontend
 GITHUB_PAT=github_pat_xxx
+
+# Resend API key (https://resend.com) used to email the maintainer when a
+# submitter provides an email contact. Optional during local dev — if omitted,
+# email-shaped contacts will fall back to plain-text in the issue body.
+RESEND_API_KEY=re_xxx
+
+# Address that contact-emails get delivered to.
+NOTIFY_EMAIL=you@example.com
