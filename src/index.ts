@@ -175,7 +175,12 @@ function composeIssueBody(
   contactSentPrivately: boolean,
   diagnostics: string | null,
 ): string {
-  const parts: string[] = [description];
+  const parts: string[] = [
+    '> [!NOTE]',
+    '> Submitted through the comfyui-mobile-frontend in-app feedback tool.',
+    '',
+    description,
+  ];
   if (validatedHandle) {
     parts.push('', '---', '', `cc @${validatedHandle}`);
   } else if (contactSentPrivately) {

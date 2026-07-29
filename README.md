@@ -35,7 +35,7 @@ If abuse becomes a problem in practice, swap in Turnstile (the previous version 
 2. `npx wrangler login` — opens browser, authorizes wrangler against your Cloudflare account.
 3. Set the production secrets:
    ```
-   npx wrangler secret put GITHUB_PAT       # fine-grained PAT, Issues: Read+Write
+   npx wrangler secret put GITHUB_PAT       # classic PAT on the BuffaloBot account, public_repo scope
    npx wrangler secret put RESEND_API_KEY   # for emailing the maintainer on email contacts
    npx wrangler secret put NOTIFY_EMAIL     # where contact-emails get delivered
    ```
@@ -61,9 +61,17 @@ If abuse becomes a problem in practice, swap in Turnstile (the previous version 
 
 ## Rotating the GitHub PAT
 
-Fine-grained PATs max out at 1 year. Set a calendar reminder. To rotate:
+The worker authenticates as the **BuffaloBot** account so issues aren't authored by
+the maintainer. This must be a **classic** PAT with the `public_repo` scope, *not* a
+fine-grained one: fine-grained PATs can only reach repos owned by the token's own
+account, so a token owned by BuffaloBot can't touch `cosmicbuffalo/comfyui-mobile-frontend`.
+A classic token acts with the account's full access, including repos it's a collaborator
+on. BuffaloBot also needs at least **Triage** collaborator access on the repo, or GitHub
+silently drops the `feedback` label when the issue is created.
 
-1. Generate a new PAT with the same scope (Issues: Read+Write on `comfyui-mobile-frontend`).
+Set a calendar reminder for whatever expiry you chose. To rotate:
+
+1. Logged in as **BuffaloBot**, generate a new classic PAT with the `public_repo` scope.
 2. `npx wrangler secret put GITHUB_PAT` — paste new value. Updates atomically; no downtime.
 3. Revoke the old PAT in GitHub settings.
 
