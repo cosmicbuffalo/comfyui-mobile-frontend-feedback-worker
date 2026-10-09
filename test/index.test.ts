@@ -5,6 +5,7 @@ const BOT = 'BuffaloBot';
 
 function makeEnv() {
   const kv = new Map<string, string>();
+  const meta = new Map<string, unknown>();
   return {
     kv,
     env: {
@@ -17,8 +18,12 @@ function makeEnv() {
       STATUS_RATE_LIMITER: { limit: async () => ({ success: true }) },
       FEEDBACK_KV: {
         get: async (key: string) => kv.get(key) ?? null,
-        put: async (key: string, value: string) => { kv.set(key, value); },
-        delete: async (key: string) => { kv.delete(key); },
+        getWithMetadata: async (key: string) => ({ value: kv.get(key) ?? null, metadata: meta.get(key) ?? null }),
+        put: async (key: string, value: string, options?: { metadata?: unknown }) => {
+          kv.set(key, value);
+          meta.set(key, options?.metadata);
+        },
+        delete: async (key: string) => { kv.delete(key); meta.delete(key); },
       },
     } as never,
   };
@@ -53,7 +58,7 @@ afterEach(() => {
 async function submitFollowed(env: never) {
   github.mockResolvedValueOnce(json({ html_url: 'https://github.com/owner/repo/issues/7', number: 7 }));
   const res = await worker.fetch(post('/feedback', { title: 't', body: 'long enough body', follow: true }), env, ctx);
-  return (await res.json()) as { number: number; secret?: string };
+  return (await res.json()) as { number: number; secret?: string; canReply?: boolean };
 }
 
 describe('follow', () => {
@@ -63,6 +68,30 @@ describe('follow', () => {
     expect(result.secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(kv.get('follow:7')).toMatch(/^[0-9a-f]{64}$/);
     expect(kv.get('follow:7')).not.toContain(result.secret!);
+    expect(result.canReply).toBe(true);
+  });
+
+  it('turns replies off when the contact is a verified GitHub handle', async () => {
+    const { env } = makeEnv();
+    github
+      .mockResolvedValueOnce(json({ login: 'someone' }))
+      .mockResolvedValueOnce(json({ html_url: 'u', number: 9 }));
+    const res = await worker.fetch(
+      post('/feedback', { title: 't', body: 'long enough body', contact: '@someone', follow: true }),
+      env,
+      ctx,
+    );
+    const result = (await res.json()) as { secret: string; canReply: boolean };
+    expect(result.canReply).toBe(false);
+
+    const calls = github.mock.calls.length;
+    const reply = await worker.fetch(post('/feedback/reply', { number: 9, secret: result.secret, body: 'still happening here' }), env, ctx);
+    expect(reply.status).toBe(403);
+    expect(await reply.json()).toEqual({ error: 'reply_on_github' });
+    expect(github.mock.calls.length).toBe(calls);
+
+    const forget = await worker.fetch(post('/feedback/forget', { number: 9, secret: result.secret }), env, ctx);
+    expect(forget.status).toBe(200);
   });
 
   it('gives no secret unless asked', async () => {

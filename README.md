@@ -15,8 +15,9 @@ mobile app -> POST /feedback (form data + honeypot field)
                     redacted from issue body, forwarded to maintainer via Resend
            -> POST to GitHub Issues API with PAT
            -> if private contact: ctx.waitUntil sendContactEmail
-           -> if follow: true, store sha256(secret) in KV as follow:<number>
-           -> return { url, number, secret? }
+           -> if follow: true, store sha256(secret) in KV as follow:<number>,
+              with metadata { canReply: false } when a GitHub handle was mentioned
+           -> return { url, number, secret?, canReply? }
 
 mobile app -> GET /feedback/status?issues=1,2   (looser per-IP limit, 30 / min)
            -> for each followed number: issue + last page of comments,
@@ -25,6 +26,7 @@ mobile app -> GET /feedback/status?issues=1,2   (looser per-IP limit, 30 / min)
 
 mobile app -> POST /feedback/reply { number, secret, body }   (strict limit)
            -> secret must hash to the stored follow; issue must not be locked
+           -> refused with reply_on_github when the follow has canReply: false
            -> comment posted by the bot, marked as from the original submitter
            -> return { url }
 
@@ -36,7 +38,9 @@ mobile app -> POST /feedback/forget { number, secret }
 the issue and posts the submitter's replies), or `closed_at`, whichever is
 later. Status needs only a followed issue number, since the issue is public;
 replying and forgetting need the secret. Only the hash is stored, and nothing
-ties it to the submitter.
+ties it to the submitter. A submitter whose GitHub handle was mentioned can
+follow but not reply through the worker: they answer on the issue. An email
+contact is only ever used for the one maintainer email at submission.
 
 The contact field is binary: only verified GitHub handles end up on the public issue (as a `cc @handle` mention, which subscribes that user just like any GitHub @-mention). Everything else is treated as private — emails, phone numbers, free text, anything that doesn't resolve to a real GitHub user — and gets forwarded to the maintainer's inbox via [Resend](https://resend.com), with the issue body showing `**Contact:** _sent privately to the maintainer_` so the submitter knows what to expect.
 

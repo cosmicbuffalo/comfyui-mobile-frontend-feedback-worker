@@ -212,7 +212,8 @@ function composeIssueBody(
 // its hash is kept, in KV under the issue number, so the worker can later
 // confirm "whoever filed #n is asking" without knowing anything about them.
 // The secret gates replies and forgetting; status needs only a followed issue
-// number, since the issue itself is public.
+// number, since the issue itself is public. Replies are off for a submitter
+// whose GitHub handle was mentioned on the issue.
 
 function followKey(issueNumber: number): string {
   return `follow:${issueNumber}`;
@@ -228,9 +229,16 @@ async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function secretMatches(env: Env, issueNumber: number, secret: string): Promise<boolean> {
-  const stored = await env.FEEDBACK_KV.get(followKey(issueNumber));
-  return stored !== null && stored === (await sha256Hex(secret));
+interface FollowMetadata {
+  // False when the submitter's GitHub handle was @-mentioned: they can answer
+  // on the issue themselves, so in-app replies are off.
+  canReply: boolean;
+}
+
+async function findFollow(env: Env, issueNumber: number, secret: string): Promise<FollowMetadata | null> {
+  const { value, metadata } = await env.FEEDBACK_KV.getWithMetadata<FollowMetadata>(followKey(issueNumber));
+  if (value === null || value !== (await sha256Hex(secret))) return null;
+  return { canReply: metadata?.canReply !== false };
 }
 
 function parseIssueNumber(value: unknown): number | null {
@@ -361,8 +369,12 @@ async function handleReply(payload: ReplyPayload, env: Env, cors: Record<string,
   if (!issueNumber || !secret || !body) {
     return jsonResponse({ error: 'invalid_fields' }, 400, cors);
   }
-  if (!(await secretMatches(env, issueNumber, secret))) {
+  const follow = await findFollow(env, issueNumber, secret);
+  if (!follow) {
     return jsonResponse({ error: 'not_following' }, 403, cors);
+  }
+  if (!follow.canReply) {
+    return jsonResponse({ error: 'reply_on_github' }, 403, cors);
   }
 
   let issue: GithubIssue | null;
@@ -394,7 +406,7 @@ async function handleForget(payload: ReplyPayload, env: Env, cors: Record<string
   if (!issueNumber || !secret) {
     return jsonResponse({ error: 'invalid_fields' }, 400, cors);
   }
-  if (!(await secretMatches(env, issueNumber, secret))) {
+  if (!(await findFollow(env, issueNumber, secret))) {
     return jsonResponse({ error: 'not_following' }, 403, cors);
   }
   await env.FEEDBACK_KV.delete(followKey(issueNumber));
@@ -449,14 +461,19 @@ async function handleSubmit(
     // The issue already exists, so a KV failure only costs the follow.
     try {
       const candidate = randomSecret();
-      await env.FEEDBACK_KV.put(followKey(issue.number), await sha256Hex(candidate));
+      const metadata: FollowMetadata = { canReply: !validatedHandle };
+      await env.FEEDBACK_KV.put(followKey(issue.number), await sha256Hex(candidate), { metadata });
       secret = candidate;
     } catch (err) {
       console.error('follow store failed', err);
     }
   }
 
-  return jsonResponse({ url: issue.html_url, number: issue.number, secret }, 200, cors);
+  return jsonResponse(
+    { url: issue.html_url, number: issue.number, secret, canReply: secret ? !validatedHandle : undefined },
+    200,
+    cors,
+  );
 }
 
 export default {
