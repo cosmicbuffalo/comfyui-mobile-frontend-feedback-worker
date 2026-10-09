@@ -26,7 +26,7 @@ namespace_id = "1002"
 simple = { limit = 30, period = 60 }
 
 # Hashes of follow secrets, keyed `follow:<issue number>`. Create it once with
-# `npx wrangler kv namespace create FEEDBACK_KV` and paste the id here.
+# `npx wrangler kv namespace create FEEDBACK_KV`.
 [[kv_namespaces]]
 binding = "FEEDBACK_KV"
-id = "REPLACE_WITH_FEEDBACK_KV_ID"
+id = "3393d93ad7f44f689735cba864c25c37"
