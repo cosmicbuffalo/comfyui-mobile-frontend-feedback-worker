@@ -15,8 +15,28 @@ mobile app -> POST /feedback (form data + honeypot field)
                     redacted from issue body, forwarded to maintainer via Resend
            -> POST to GitHub Issues API with PAT
            -> if private contact: ctx.waitUntil sendContactEmail
-           -> return { url, number }
+           -> if follow: true, store sha256(secret) in KV as follow:<number>
+           -> return { url, number, secret? }
+
+mobile app -> GET /feedback/status?issues=1,2   (looser per-IP limit, 30 / min)
+           -> for each followed number: issue + last page of comments,
+              cached 5 min at the edge
+           -> return { issues: [{ number, state, locked, activityAt }], unknown: [...] }
+
+mobile app -> POST /feedback/reply { number, secret, body }   (strict limit)
+           -> secret must hash to the stored follow; issue must not be locked
+           -> comment posted by the bot, marked as from the original submitter
+           -> return { url }
+
+mobile app -> POST /feedback/forget { number, secret }
+           -> deletes the follow, so the secret stops working
 ```
+
+`activityAt` is the newest comment by anyone other than the bot (the bot files
+the issue and posts the submitter's replies), or `closed_at`, whichever is
+later. Status needs only a followed issue number, since the issue is public;
+replying and forgetting need the secret. Only the hash is stored, and nothing
+ties it to the submitter.
 
 The contact field is binary: only verified GitHub handles end up on the public issue (as a `cc @handle` mention, which subscribes that user just like any GitHub @-mention). Everything else is treated as private — emails, phone numbers, free text, anything that doesn't resolve to a real GitHub user — and gets forwarded to the maintainer's inbox via [Resend](https://resend.com), with the issue body showing `**Contact:** _sent privately to the maintainer_` so the submitter knows what to expect.
 
@@ -38,6 +58,10 @@ If abuse becomes a problem in practice, swap in Turnstile (the previous version 
    npx wrangler secret put GITHUB_PAT       # classic PAT on the BuffaloBot account, public_repo scope
    npx wrangler secret put RESEND_API_KEY   # for emailing the maintainer on email contacts
    npx wrangler secret put NOTIFY_EMAIL     # where contact-emails get delivered
+   ```
+   Create the KV namespace for follows and paste its id into `wrangler.toml`:
+   ```
+   npx wrangler kv namespace create FEEDBACK_KV
    ```
    The `FROM_EMAIL` value lives in `wrangler.toml` since it's already public via DNS.
 4. `npx wrangler deploy` — deploys to `comfyui-mobile-frontend-feedback.<your-subdomain>.workers.dev`.

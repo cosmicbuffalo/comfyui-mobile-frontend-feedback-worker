@@ -16,3 +16,17 @@ name = "RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1001"
 simple = { limit = 3, period = 60 }
+
+# Status checks and forgetting run on their own while the app is open, so they
+# get a looser limit than submitting and replying, which post to GitHub.
+[[unsafe.bindings]]
+name = "STATUS_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 30, period = 60 }
+
+# Hashes of follow secrets, keyed `follow:<issue number>`. Create it once with
+# `npx wrangler kv namespace create FEEDBACK_KV` and paste the id here.
+[[kv_namespaces]]
+binding = "FEEDBACK_KV"
+id = "REPLACE_WITH_FEEDBACK_KV_ID"
