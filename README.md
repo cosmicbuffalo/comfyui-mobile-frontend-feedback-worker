@@ -22,7 +22,7 @@ mobile app -> POST /feedback (form data + honeypot field)
 mobile app -> GET /feedback/status?issues=1,2   (looser per-IP limit, 30 / min)
            -> for each followed number: issue + last page of comments,
               cached 5 min at the edge
-           -> return { issues: [{ number, state, locked, activityAt }], unknown: [...] }
+           -> return { issues: [{ number, state, locked, activityAt, updatedAt }], unknown: [...] }
 
 mobile app -> POST /feedback/reply { number, secret, body }   (strict limit)
            -> secret must hash to the stored follow; issue must not be locked

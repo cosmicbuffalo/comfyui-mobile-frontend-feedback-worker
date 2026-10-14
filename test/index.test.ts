@@ -108,14 +108,14 @@ describe('status', () => {
     const { env } = makeEnv();
     await submitFollowed(env);
     github
-      .mockResolvedValueOnce(json({ number: 7, state: 'open', locked: false, closed_at: null, comments: 2, user: { login: BOT } }))
+      .mockResolvedValueOnce(json({ number: 7, state: 'open', locked: false, closed_at: null, updated_at: '2026-10-02T00:00:00Z', comments: 2, user: { login: BOT } }))
       .mockResolvedValueOnce(json([
         { created_at: '2026-10-01T00:00:00Z', user: { login: 'maintainer' } },
         { created_at: '2026-10-02T00:00:00Z', user: { login: BOT } },
       ]));
     const res = await worker.fetch(new Request('https://feedback.test/feedback/status?issues=7,9'), env, ctx);
     expect(await res.json()).toEqual({
-      issues: [{ number: 7, state: 'open', locked: false, activityAt: '2026-10-01T00:00:00Z' }],
+      issues: [{ number: 7, state: 'open', locked: false, activityAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-02T00:00:00Z' }],
       unknown: [9],
     });
   });

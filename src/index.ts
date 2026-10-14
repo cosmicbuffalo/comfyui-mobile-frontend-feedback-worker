@@ -252,6 +252,8 @@ interface IssueStatus {
   // Latest time someone other than the bot commented, or the issue was
   // closed. Null when nothing has happened since it was filed.
   activityAt: string | null;
+  // Last change by anyone, the submitter included.
+  updatedAt: string;
 }
 
 interface GithubIssue {
@@ -259,6 +261,7 @@ interface GithubIssue {
   state: 'open' | 'closed';
   locked: boolean;
   closed_at: string | null;
+  updated_at: string;
   comments: number;
   user: { login: string } | null;
 }
@@ -298,7 +301,7 @@ async function fetchIssueStatus(env: Env, issueNumber: number): Promise<IssueSta
       if (!activityAt || comment.created_at > activityAt) activityAt = comment.created_at;
     }
   }
-  return { number: issue.number, state: issue.state, locked: issue.locked, activityAt };
+  return { number: issue.number, state: issue.state, locked: issue.locked, activityAt, updatedAt: issue.updated_at };
 }
 
 // Every open app polls, so cache each issue's status at the edge rather than
